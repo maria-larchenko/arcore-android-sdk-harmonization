@@ -28,6 +28,10 @@ android {
         targetSdkVersion 36
         versionCode 1
         versionName '1.0'
+
+        // Enable RenderScript support
+        renderscriptTargetApi 30
+        renderscriptSupportModeEnabled true
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

@@ -19,6 +19,7 @@ import android.content.res.Resources
 import android.opengl.GLSurfaceView
 import android.view.View
 import android.widget.ImageButton
+import android.widget.Button
 import android.widget.PopupMenu
 import androidx.appcompat.app.AlertDialog
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -45,6 +46,14 @@ class HelloArView(val activity: HelloArActivity) : DefaultLifecycleObserver {
           inflate(R.menu.settings_menu)
           show()
         }
+      }
+    }
+
+  // Button that captures current frame
+  private val captureButton =
+    root.findViewById<android.widget.Button>(R.id.capture_button).apply {
+      setOnClickListener {
+        activity.renderer.requestSave()
       }
     }
 

@@ -48,6 +48,24 @@ import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.NotYetAvailableException
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.io.File
+import java.io.FileOutputStream
+import android.graphics.Bitmap
+import java.nio.IntBuffer
+import android.media.Image
+import android.graphics.ImageFormat
+import android.graphics.YuvImage
+import android.graphics.Rect
+import android.graphics.BitmapFactory
+import java.io.ByteArrayOutputStream
+import android.renderscript.RenderScript
+import android.renderscript.ScriptIntrinsicYuvToRGB
+import android.renderscript.Allocation
+import android.renderscript.Element
+import android.renderscript.Type
+import android.os.Environment
+import android.content.ContentValues
+import android.provider.MediaStore
 
 /** Renders the HelloAR application using our example Renderer. */
 class HelloArRenderer(val activity: HelloArActivity) :
@@ -251,6 +269,12 @@ class HelloArRenderer(val activity: HelloArActivity) :
     virtualSceneFramebuffer.resize(width, height)
   }
 
+  private var saveNextFrame = false
+
+  fun requestSave() {             // call this from a button in the UI
+      saveNextFrame = true
+  }
+
   override fun onDrawFrame(render: SampleRender) {
     val session = session ?: return
 
@@ -407,6 +431,11 @@ class HelloArRenderer(val activity: HelloArActivity) :
       render.draw(virtualObjectMesh, virtualObjectShader, virtualSceneFramebuffer)
     }
 
+    if (saveNextFrame) {
+        saveNextFrame = false
+        saveImages(frame)       // <— background + foreground
+    }
+
     // Compose the virtual scene with the background.
     backgroundRenderer.drawVirtualScene(render, virtualSceneFramebuffer, Z_NEAR, Z_FAR)
   }
@@ -524,6 +553,173 @@ class HelloArRenderer(val activity: HelloArActivity) :
 
   private fun showError(errorMessage: String) =
     activity.view.snackbarHelper.showError(activity, errorMessage)
+
+  private fun saveImages(frame: Frame) {
+      val resolver = activity.contentResolver
+
+      // Create timestamp-based names to avoid overwriting
+      val timestamp = System.currentTimeMillis()
+
+      // --- 1. virtual scene (PNG) ----------------------------------------
+      val w = virtualSceneFramebuffer.width
+      val h = virtualSceneFramebuffer.height
+
+//      val buf = IntArray(w * h)   // produces wrong conversion of color schemes!
+//      GLES30.glReadPixels(0, 0, w, h,
+//          GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, IntBuffer.wrap(buf))
+
+      // https://stackoverflow.com/questions/16461284/difference-between-bytebuffer-flip-and-bytebuffer-rewind
+      val byteBuf = ByteBuffer.allocateDirect(w * h * 4)
+      GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, byteBuf)
+      byteBuf.rewind()
+      val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+      bmp.copyPixelsFromBuffer(byteBuf)          // copies bytes as R-G-B-A
+
+    val pngValues = ContentValues().apply {
+          put(MediaStore.Images.Media.DISPLAY_NAME, "foreground_${timestamp}.png")
+          put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+          put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ARCore")
+      }
+
+      val pngUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, pngValues)
+      if (pngUri == null) {
+          Log.e(TAG, "Failed to create MediaStore entry for PNG file")
+      } else {
+          resolver.openOutputStream(pngUri)?.use { os ->
+              bmp.compress(Bitmap.CompressFormat.PNG, 100, os)
+              os.flush()
+              Log.d(TAG, "Saved foreground PNG to ${pngUri}")
+          }
+      }
+
+      // --- 2. background colour buffer (matches viewport/FBO) ------------
+//      val wBg = virtualSceneFramebuffer.width
+//      val hBg = virtualSceneFramebuffer.height
+//      val bgBuf = IntArray(wBg * hBg)
+//
+//      // Bind default framebuffer to read camera quad
+//      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+//      GLES30.glReadPixels(0, 0, wBg, hBg,
+//          GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, IntBuffer.wrap(bgBuf))
+
+      val bgByteBuf = ByteBuffer.allocateDirect(w * h * 4)
+      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+      GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, bgByteBuf)
+      bgByteBuf.rewind()
+      val bgBmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+      bgBmp.copyPixelsFromBuffer(bgByteBuf)          // copies bytes as R-G-B-A
+
+      val bgValues = ContentValues().apply {
+          put(MediaStore.Images.Media.DISPLAY_NAME, "background_${timestamp}.jpg")
+          put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+          put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ARCore")
+      }
+
+      val bgUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, bgValues)
+      if (bgUri == null) {
+          Log.e(TAG, "Failed to create MediaStore entry for background JPEG")
+      } else {
+          resolver.openOutputStream(bgUri)?.use { os ->
+//              Bitmap.createBitmap(bgBuf, wBg, hBg, Bitmap.Config.ARGB_8888)
+                bgBmp.compress(Bitmap.CompressFormat.JPEG, 100, os)
+              os.flush()
+              Log.d(TAG, "Saved background JPEG to ${bgUri}")
+          }
+      }
+  }
+
+  /** Converts a YUV_420_888 Image to an ARGB_8888 Bitmap using RenderScript for proper color */
+  private fun yuv420888ImageToBitmap(image: Image): Bitmap {
+    val width = image.width
+    val height = image.height
+
+    // Convert YUV_420_888 to NV21 byte array respecting pixel- and row-strides
+    val nv21 = imageToNV21(image)
+
+    // Lazily create RenderScript objects (reuse across calls)
+    if (!::rs.isInitialized) {
+      rs = RenderScript.create(activity)
+      yuvToRgbScript = ScriptIntrinsicYuvToRGB.create(rs, Element.U8_4(rs))
+    }
+
+    // Create or resize allocations as necessary
+    val yuvType = Type.Builder(rs, Element.U8(rs)).setX(nv21.size).create()
+    if (yuvAllocation == null || yuvAllocation!!.type.x != nv21.size) {
+      yuvAllocation = Allocation.createTyped(rs, yuvType, Allocation.USAGE_SCRIPT)
+    }
+
+    val rgbType = Type.Builder(rs, Element.RGBA_8888(rs)).setX(width).setY(height).create()
+    if (rgbAllocation == null || rgbAllocation!!.type.x != width || rgbAllocation!!.type.y != height) {
+      rgbAllocation = Allocation.createTyped(rs, rgbType, Allocation.USAGE_SCRIPT)
+    }
+
+    // Load YUV data and run the script
+    yuvAllocation!!.copyFrom(nv21)
+    yuvToRgbScript!!.setInput(yuvAllocation)
+    yuvToRgbScript!!.forEach(rgbAllocation)
+
+    // Copy to Bitmap
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    rgbAllocation!!.copyTo(bitmap)
+    return bitmap
+  }
+
+  // -------- RenderScript fields ---------
+  private lateinit var rs: RenderScript
+  private var yuvToRgbScript: ScriptIntrinsicYuvToRGB? = null
+  private var yuvAllocation: Allocation? = null
+  private var rgbAllocation: Allocation? = null
+
+  /** Converts Image in YUV_420_888 format to an NV21 byte[] suitable for RenderScript */
+  private fun imageToNV21(image: Image): ByteArray {
+    val width = image.width
+    val height = image.height
+
+    val yPlane = image.planes[0]
+    val uPlane = image.planes[1]
+    val vPlane = image.planes[2]
+
+    val ySize = width * height
+    val uvSize = width * height / 2
+
+    val nv21 = ByteArray(ySize + uvSize)
+
+    // Copy Y plane
+    val yBuffer = yPlane.buffer
+    val yRowStride = yPlane.rowStride
+    val yPixelStride = yPlane.pixelStride
+    var dstIndex = 0
+    for (row in 0 until height) {
+      var srcIndex = row * yRowStride
+      for (col in 0 until width) {
+        nv21[dstIndex++] = yBuffer.get(srcIndex)
+        srcIndex += yPixelStride
+      }
+    }
+
+    // Copy UV planes: NV21 requires V then U interleaved
+    val uBuffer = uPlane.buffer
+    val vBuffer = vPlane.buffer
+    val uvRowStride = uPlane.rowStride
+    val uvPixelStride = uPlane.pixelStride
+
+    var uvDstIndex = ySize
+    for (row in 0 until height / 2) {
+      var uSrcIndex = row * uvRowStride
+      var vSrcIndex = row * uvRowStride
+      for (col in 0 until width / 2) {
+        // V
+        nv21[uvDstIndex++] = vBuffer.get(vSrcIndex)
+        // U
+        nv21[uvDstIndex++] = uBuffer.get(uSrcIndex)
+
+        uSrcIndex += uvPixelStride
+        vSrcIndex += uvPixelStride
+      }
+    }
+
+    return nv21
+  }
 }
 
 /**
