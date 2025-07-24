@@ -16,41 +16,8 @@
  */
 precision mediump float;
 
-// This shader will light scenes based on ARCore's Environmental HDR mode with a
-// physically based rendering model.
-//
-// When using the HDR Cubemap from ARCore for specular reflections, please note
-// that the following equation is true of ARCore's Environmental HDR lighting
-// estimation, where E(x) is irradiance of x.
-//
-// E(spherical harmonics) + E(main light) == E(cubemap)
-//
-// In order to not duplicate the specular lighting contribution of the main
-// light, we must use the following equation, where Lo is total reflected
-// radiance (i.e. linear color output), Ld(x) is the reflected diffuse radiance
-// of x, and Ls(x) is reflected specular radiance of x.
-//
-// Lo = Ld(spherical harmonics) + Ld(main light) + Ls(cubemap)
-//
-// The Filament documentation has excellent documentation on the subject of
-// image based lighting:
-// https://google.github.io/filament/Filament.md.html#lighting/imagebasedlights
-//
-// If you would rather not use the HDR cubemap in your application, you would
-// need to adjust the lighting calculations to reflect the following equation
-// instead.
-//
-// Lo = Ld(spherical harmonics) + Ld(main light) + Ls(main light)
-//
-// See the definitions of Pbr_CalculateMainLightRadiance and
-// Pbr_CalculateEnvironmentalRadiance.
-
 // Number of mipmap levels in the filtered cubemap.
 const int kNumberOfRoughnessLevels = NUMBER_OF_MIPMAP_LEVELS;
-
-// The albedo and roughness/metallic textures.
-uniform sampler2D u_AlbedoTexture;
-uniform sampler2D u_RoughnessMetallicAmbientOcclusionTexture;
 
 // The intensity of the main directional light.
 uniform vec3 u_LightIntensity;
@@ -83,8 +50,6 @@ uniform mat4 u_ViewInverse;
 // shader when the light estimate is not valid.
 uniform bool u_LightEstimateIsValid;
 
-// My uniform
-uniform mat4 u_ColorCorrection;
 
 struct MaterialParameters {
   vec3 diffuse;
@@ -271,31 +236,6 @@ void main() {
   // Mirror texture coordinates over the X axis
   vec2 texCoord = vec2(v_TexCoord.x, 1.0 - v_TexCoord.y);
 
-  // Skip all lighting calculations if the estimation is not valid.
-  if (!u_LightEstimateIsValid) {
-    o_FragColor = vec4(texture(u_AlbedoTexture, texCoord).rgb, 1.0);
-    return;
-  }
-
-  ShadingParameters shading;
-  Pbr_CreateShadingParameters(v_ViewNormal, v_ViewPosition,
-                              u_ViewLightDirection, u_ViewInverse, shading);
-
-  MaterialParameters material;
-  Pbr_CreateMaterialParameters(texCoord, u_AlbedoTexture,
-                               u_RoughnessMetallicAmbientOcclusionTexture,
-                               u_DfgTexture, shading, material);
-
-  // Combine the radiance contributions of both the main light and environment
-  vec3 mainLightRadiance =
-      Pbr_CalculateMainLightRadiance(shading, material, u_LightIntensity);
-
-  vec3 environmentalRadiance = Pbr_CalculateEnvironmentalRadiance(
-      shading, material, u_SphericalHarmonicsCoefficients, u_Cubemap);
-
-  vec3 radiance = mainLightRadiance + environmentalRadiance;
-
   // Convert final color to sRGB color space
-  o_FragColor = vec4(LinearToSrgb(radiance), 1.0);
-  o_FragColor = u_ColorCorrection * o_FragColor;
+  o_FragColor = vec4(1, 1, 1, 1);
 }

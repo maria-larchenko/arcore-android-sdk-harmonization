@@ -293,7 +293,7 @@ public class PlaneRenderer {
       vertexBufferObject.set(vertexBuffer);
       indexBufferObject.set(indexBuffer);
 
-      render.draw(mesh, shader);
+      render.draw(mesh, shader); // pass index of new framebuffer?
     }
   }
 

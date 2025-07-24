@@ -124,6 +124,7 @@ class HelloArRenderer(val activity: HelloArActivity) :
   // Virtual object (ARCore pawn)
   lateinit var virtualObjectMesh: Mesh
   lateinit var virtualObjectShader: Shader
+  lateinit var maskObjectShader: Shader
   lateinit var virtualObjectAlbedoTexture: Texture
   lateinit var virtualObjectAlbedoInstantPlacementTexture: Texture
 
@@ -258,6 +259,14 @@ class HelloArRenderer(val activity: HelloArActivity) :
           .setTexture("u_RoughnessMetallicAmbientOcclusionTexture", virtualObjectPbrTexture)
           .setTexture("u_Cubemap", cubemapFilter.filteredCubemapTexture)
           .setTexture("u_DfgTexture", dfgTexture)
+
+      maskObjectShader =
+        Shader.createFromAssets(
+          render,
+          "shaders/environmental_hdr.vert",
+          "shaders/mask_hdr.frag",
+          mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
+        )
     } catch (e: IOException) {
       Log.e(TAG, "Failed to read a required asset file", e)
       showError("Failed to read a required asset file: $e")
@@ -396,7 +405,7 @@ class HelloArRenderer(val activity: HelloArActivity) :
       render,
       session.getAllTrackables<Plane>(Plane::class.java),
       camera.displayOrientedPose,
-      projectionMatrix
+      projectionMatrix,
     )
 
     // -- Draw occluded virtual objects
@@ -416,9 +425,15 @@ class HelloArRenderer(val activity: HelloArActivity) :
       Matrix.multiplyMM(modelViewMatrix, 0, viewMatrix, 0, modelMatrix, 0)
       Matrix.multiplyMM(modelViewProjectionMatrix, 0, projectionMatrix, 0, modelViewMatrix, 0)
 
+      val testMat = FloatArray(16)
+      testMat.fill(0.0f)
+      testMat[0] = 1.0f
+      testMat[15] = 1.0f
+
       // Update shader properties and draw
       virtualObjectShader.setMat4("u_ModelView", modelViewMatrix)
       virtualObjectShader.setMat4("u_ModelViewProjection", modelViewProjectionMatrix)
+      virtualObjectShader.setMat4("u_ColorCorrection", testMat)
       val texture =
         if ((trackable as? InstantPlacementPoint)?.trackingMethod ==
             InstantPlacementPoint.TrackingMethod.SCREENSPACE_WITH_APPROXIMATE_DISTANCE
@@ -428,7 +443,12 @@ class HelloArRenderer(val activity: HelloArActivity) :
           virtualObjectAlbedoTexture
         }
       virtualObjectShader.setTexture("u_AlbedoTexture", texture)
-      render.draw(virtualObjectMesh, virtualObjectShader, virtualSceneFramebuffer)
+      render.draw(virtualObjectMesh, virtualObjectShader) //, virtualSceneFramebuffer)
+
+      // Update shader properties and draw
+      maskObjectShader.setMat4("u_ModelView", modelViewMatrix)
+      maskObjectShader.setMat4("u_ModelViewProjection", modelViewProjectionMatrix)
+      render.draw(virtualObjectMesh, maskObjectShader, virtualSceneFramebuffer)
     }
 
     if (saveNextFrame) {
@@ -437,7 +457,7 @@ class HelloArRenderer(val activity: HelloArActivity) :
     }
 
     // Compose the virtual scene with the background.
-    backgroundRenderer.drawVirtualScene(render, virtualSceneFramebuffer, Z_NEAR, Z_FAR)
+//    backgroundRenderer.drawVirtualScene(render, virtualSceneFramebuffer, Z_NEAR, Z_FAR)
   }
 
   /** Checks if we detected at least one plane. */
@@ -570,6 +590,7 @@ class HelloArRenderer(val activity: HelloArActivity) :
 
       // https://stackoverflow.com/questions/16461284/difference-between-bytebuffer-flip-and-bytebuffer-rewind
       val byteBuf = ByteBuffer.allocateDirect(w * h * 4)
+      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 1)
       GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, byteBuf)
       byteBuf.rewind()
       val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
@@ -593,14 +614,6 @@ class HelloArRenderer(val activity: HelloArActivity) :
       }
 
       // --- 2. background colour buffer (matches viewport/FBO) ------------
-//      val wBg = virtualSceneFramebuffer.width
-//      val hBg = virtualSceneFramebuffer.height
-//      val bgBuf = IntArray(wBg * hBg)
-//
-//      // Bind default framebuffer to read camera quad
-//      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-//      GLES30.glReadPixels(0, 0, wBg, hBg,
-//          GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, IntBuffer.wrap(bgBuf))
 
       val bgByteBuf = ByteBuffer.allocateDirect(w * h * 4)
       GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
