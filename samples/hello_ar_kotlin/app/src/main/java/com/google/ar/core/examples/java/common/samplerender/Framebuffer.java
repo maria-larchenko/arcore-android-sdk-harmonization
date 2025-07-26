@@ -165,8 +165,8 @@ public class Framebuffer implements Closeable {
     return height;
   }
 
-  /* package-private */
-  int getFramebufferId() {
+  /** Returns the OpenGL ES framebuffer object ID backing this Framebuffer. */
+  public int getFramebufferId() {
     return framebufferId[0];
   }
 }

@@ -85,6 +85,7 @@ uniform bool u_LightEstimateIsValid;
 
 // My uniform
 uniform mat4 u_ColorCorrection;
+//uniform mat4 u_ColorCorrectionS;
 
 struct MaterialParameters {
   vec3 diffuse;

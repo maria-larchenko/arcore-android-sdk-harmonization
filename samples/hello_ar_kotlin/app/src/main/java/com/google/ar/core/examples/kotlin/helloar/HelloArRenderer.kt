@@ -15,11 +15,20 @@
  */
 package com.google.ar.core.examples.kotlin.helloar
 
+//import java.nio.FloatBuffer
+import android.R.attr.height
+import android.R.attr.width
+import android.content.ContentValues
+import android.graphics.Bitmap
 import android.opengl.GLES30
 import android.opengl.Matrix
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.google.ai.edge.litert.Accelerator
+import com.google.ai.edge.litert.CompiledModel
 import com.google.ar.core.Anchor
 import com.google.ar.core.Camera
 import com.google.ar.core.DepthPoint
@@ -48,24 +57,8 @@ import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.NotYetAvailableException
 import java.io.IOException
 import java.nio.ByteBuffer
-import java.io.File
-import java.io.FileOutputStream
-import android.graphics.Bitmap
-import java.nio.IntBuffer
-import android.media.Image
-import android.graphics.ImageFormat
-import android.graphics.YuvImage
-import android.graphics.Rect
-import android.graphics.BitmapFactory
-import java.io.ByteArrayOutputStream
-import android.renderscript.RenderScript
-import android.renderscript.ScriptIntrinsicYuvToRGB
-import android.renderscript.Allocation
-import android.renderscript.Element
-import android.renderscript.Type
-import android.os.Environment
-import android.content.ContentValues
-import android.provider.MediaStore
+import java.nio.ByteOrder
+
 
 /** Renders the HelloAR application using our example Renderer. */
 class HelloArRenderer(val activity: HelloArActivity) :
@@ -110,6 +103,10 @@ class HelloArRenderer(val activity: HelloArActivity) :
   lateinit var planeRenderer: PlaneRenderer
   lateinit var backgroundRenderer: BackgroundRenderer
   lateinit var virtualSceneFramebuffer: Framebuffer
+  lateinit var virtualMaskFramebuffer: Framebuffer
+  lateinit var compositeFramebuffer: Framebuffer
+  // Full-screen quad used for post-processing passes such as color+mask composition
+  lateinit var compositeMesh: Mesh
   var hasSetTextureNames = false
 
   // Point Cloud
@@ -121,10 +118,14 @@ class HelloArRenderer(val activity: HelloArActivity) :
   // was not changed.  Do this using the timestamp since we can't compare PointCloud objects.
   var lastPointCloudTimestamp: Long = 0
 
+  // lateinit var interpreter: Interpreter
+  lateinit var compiledModel: CompiledModel
+
   // Virtual object (ARCore pawn)
   lateinit var virtualObjectMesh: Mesh
   lateinit var virtualObjectShader: Shader
   lateinit var maskObjectShader: Shader
+  lateinit var compositeShader: Shader
   lateinit var virtualObjectAlbedoTexture: Texture
   lateinit var virtualObjectAlbedoInstantPlacementTexture: Texture
 
@@ -163,12 +164,22 @@ class HelloArRenderer(val activity: HelloArActivity) :
   }
 
   override fun onSurfaceCreated(render: SampleRender) {
+    // --------  Init the encoder model
+     compiledModel = CompiledModel.create(
+        activity.assets,
+        "mkl_encoder_256.tflite",
+        CompiledModel.Options(Accelerator.GPU)
+    )
+    Log.d(TAG, compiledModel.toString())
+
     // Prepare the rendering objects.
     // This involves reading shaders and 3D model files, so may throw an IOException.
     try {
       planeRenderer = PlaneRenderer(render)
       backgroundRenderer = BackgroundRenderer(render)
       virtualSceneFramebuffer = Framebuffer(render, /*width=*/ 1, /*height=*/ 1)
+      virtualMaskFramebuffer = Framebuffer(render, /*width=*/ 1, /*height=*/ 1)
+      compositeFramebuffer = Framebuffer(render, /*width=*/ 1, /*height=*/ 1)
 
       cubemapFilter =
         SpecularCubemapFilter(render, CUBEMAP_RESOLUTION, CUBEMAP_NUMBER_OF_IMPORTANCE_SAMPLES)
@@ -224,49 +235,108 @@ class HelloArRenderer(val activity: HelloArActivity) :
         Mesh(render, Mesh.PrimitiveMode.POINTS, /*indexBuffer=*/ null, pointCloudVertexBuffers)
 
       // Virtual object to render (ARCore pawn)
-      virtualObjectAlbedoTexture =
-        Texture.createFromAsset(
-          render,
-          "models/pawn_albedo.png",
-          Texture.WrapMode.CLAMP_TO_EDGE,
-          Texture.ColorFormat.SRGB
-        )
+//      val myobject = "ARCore pawn"
+      val myobject = "Minecraft chicken"
 
-      virtualObjectAlbedoInstantPlacementTexture =
-        Texture.createFromAsset(
-          render,
-          "models/pawn_albedo_instant_placement.png",
-          Texture.WrapMode.CLAMP_TO_EDGE,
-          Texture.ColorFormat.SRGB
-        )
-
-      val virtualObjectPbrTexture =
-        Texture.createFromAsset(
-          render,
-          "models/pawn_roughness_metallic_ao.png",
-          Texture.WrapMode.CLAMP_TO_EDGE,
-          Texture.ColorFormat.LINEAR
-        )
-      virtualObjectMesh = Mesh.createFromAsset(render, "models/pawn.obj")
-      virtualObjectShader =
-        Shader.createFromAssets(
+      if (myobject == "ARCore pawn") {
+        virtualObjectAlbedoTexture =
+          Texture.createFromAsset(
+            render,
+            "models/pawn_albedo.png",
+            Texture.WrapMode.CLAMP_TO_EDGE,
+            Texture.ColorFormat.SRGB
+          )
+        virtualObjectAlbedoInstantPlacementTexture =
+          Texture.createFromAsset(
+            render,
+            "models/pawn_albedo_instant_placement.png",
+            Texture.WrapMode.CLAMP_TO_EDGE,
+            Texture.ColorFormat.SRGB
+          )
+        val virtualObjectPbrTexture =
+          Texture.createFromAsset(
+            render,
+            "models/pawn_roughness_metallic_ao.png",
+            Texture.WrapMode.CLAMP_TO_EDGE,
+            Texture.ColorFormat.LINEAR
+          )
+        virtualObjectMesh = Mesh.createFromAsset(render, "models/pawn.obj")
+        virtualObjectShader =
+          Shader.createFromAssets(
             render,
             "shaders/environmental_hdr.vert",
             "shaders/environmental_hdr.frag",
             mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
           )
-          .setTexture("u_AlbedoTexture", virtualObjectAlbedoTexture)
-          .setTexture("u_RoughnessMetallicAmbientOcclusionTexture", virtualObjectPbrTexture)
-          .setTexture("u_Cubemap", cubemapFilter.filteredCubemapTexture)
-          .setTexture("u_DfgTexture", dfgTexture)
+            .setTexture("u_AlbedoTexture", virtualObjectAlbedoTexture)
+            .setTexture("u_RoughnessMetallicAmbientOcclusionTexture", virtualObjectPbrTexture)
+            .setTexture("u_Cubemap", cubemapFilter.filteredCubemapTexture)
+            .setTexture("u_DfgTexture", dfgTexture)
+        maskObjectShader =
+          Shader.createFromAssets(
+            render,
+            "shaders/environmental_hdr.vert",
+            "shaders/mask_hdr.frag",
+            mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
+          )
+      } else {
+        virtualObjectAlbedoTexture =
+          Texture.createFromAsset(
+            render,
+            "models/chair_albedo.png",
+//            "models/chicken_albedo.png",
+            Texture.WrapMode.CLAMP_TO_EDGE,
+            Texture.ColorFormat.SRGB
+          )
+        virtualObjectMesh = Mesh.createFromAsset(render, "models/chair.obj")
+//        virtualObjectMesh = Mesh.createFromAsset(render, "models/chicken.obj")
+        virtualObjectShader =
+          Shader.createFromAssets(
+            render,
+            "shaders/environmental_hdr.vert",
+            "shaders/environmental_hdr.frag",
+            mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
+          )
+            .setTexture("u_AlbedoTexture", virtualObjectAlbedoTexture)
+            .setTexture("u_Cubemap", cubemapFilter.filteredCubemapTexture)
+            .setTexture("u_DfgTexture", dfgTexture)
+        maskObjectShader =
+          Shader.createFromAssets(
+            render,
+            "shaders/environmental_hdr.vert",
+            "shaders/mask_hdr.frag",
+            mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
+          )
+      }
+      compositeShader = Shader.createFromAssets(
+        render,
+        "shaders/composite_rgba.vert",
+        "shaders/composite_rgba.frag",
+        null)
 
-      maskObjectShader =
-        Shader.createFromAssets(
-          render,
-          "shaders/environmental_hdr.vert",
-          "shaders/mask_hdr.frag",
-          mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
-        )
+      // ---------- build a full-screen quad mesh (NDC positions + texcoords) ---------
+      val coords = floatArrayOf(
+        -1f, -1f,   // bottom-left
+         1f, -1f,   // bottom-right
+        -1f,  1f,   // top-left
+         1f,  1f    // top-right
+      )
+      val tex = floatArrayOf(
+          0f, 0f,
+          1f, 0f,
+          0f, 1f,
+          1f, 1f
+      )
+      val coordsBuffer = ByteBuffer.allocateDirect(coords.size * 4)
+        .order(ByteOrder.nativeOrder()).asFloatBuffer().put(coords)
+      coordsBuffer.rewind()
+      val texBuffer = ByteBuffer.allocateDirect(tex.size * 4)
+        .order(ByteOrder.nativeOrder()).asFloatBuffer().put(tex)
+      texBuffer.rewind()
+
+      val screenVb = VertexBuffer(render, /*entriesPerVertex=*/2, coordsBuffer)
+      val texVb    = VertexBuffer(render, /*entriesPerVertex=*/2, texBuffer)
+      compositeMesh = Mesh(render, Mesh.PrimitiveMode.TRIANGLE_STRIP, null, arrayOf(screenVb, texVb))
     } catch (e: IOException) {
       Log.e(TAG, "Failed to read a required asset file", e)
       showError("Failed to read a required asset file: $e")
@@ -276,6 +346,8 @@ class HelloArRenderer(val activity: HelloArActivity) :
   override fun onSurfaceChanged(render: SampleRender, width: Int, height: Int) {
     displayRotationHelper.onSurfaceChanged(width, height)
     virtualSceneFramebuffer.resize(width, height)
+    virtualMaskFramebuffer.resize(width, height)
+    compositeFramebuffer.resize(width, height)
   }
 
   private var saveNextFrame = false
@@ -415,6 +487,8 @@ class HelloArRenderer(val activity: HelloArActivity) :
 
     // Visualize anchors created by touch.
     render.clear(virtualSceneFramebuffer, 0f, 0f, 0f, 0f)
+    render.clear(virtualMaskFramebuffer, 0f, 0f, 0f, 0f)
+    render.clear(compositeFramebuffer, 0f, 0f, 0f, 0f)
     for ((anchor, trackable) in
       wrappedAnchors.filter { it.anchor.trackingState == TrackingState.TRACKING }) {
       // Get the current pose of an Anchor in world space. The Anchor pose is updated
@@ -425,9 +499,36 @@ class HelloArRenderer(val activity: HelloArActivity) :
       Matrix.multiplyMM(modelViewMatrix, 0, viewMatrix, 0, modelMatrix, 0)
       Matrix.multiplyMM(modelViewProjectionMatrix, 0, projectionMatrix, 0, modelViewMatrix, 0)
 
+//      // -----------  Run inference
+//      val inputBuffers = compiledModel.createInputBuffers()
+//      val outputBuffers = compiledModel.createOutputBuffers()
+//
+//      val dummy_input = FloatArray(256*256*4)
+//
+//      inputBuffers[0].writeFloat(dummy_input)
+//      compiledModel.run(inputBuffers, outputBuffers)
+//
+//      val outputFloatArray = outputBuffers[0].readFloat()
+//      Log.d(TAG, outputFloatArray.size.toString())
+
+      //      val testMat = FloatArray(16)
+//      testMat.fill(0.0f)
+//      testMat[0] = outputFloatArray[0]
+//      testMat[5] = outputFloatArray[4]
+//      testMat[10] = outputFloatArray[8]
+//      testMat[15] = 1.0f
+//      testMat[1] = outputFloatArray[1]
+//      testMat[2] = outputFloatArray[2]
+//      testMat[4] = outputFloatArray[3]
+//      testMat[8] = outputFloatArray[6]
+//      testMat[6] = outputFloatArray[5]
+//      testMat[9] = outputFloatArray[7]
+
       val testMat = FloatArray(16)
       testMat.fill(0.0f)
       testMat[0] = 1.0f
+      testMat[5] = 1.0f
+      testMat[10] = 1.0f
       testMat[15] = 1.0f
 
       // Update shader properties and draw
@@ -443,12 +544,21 @@ class HelloArRenderer(val activity: HelloArActivity) :
           virtualObjectAlbedoTexture
         }
       virtualObjectShader.setTexture("u_AlbedoTexture", texture)
-      render.draw(virtualObjectMesh, virtualObjectShader) //, virtualSceneFramebuffer)
+      render.draw(virtualObjectMesh, virtualObjectShader)
 
-      // Update shader properties and draw
+      backgroundRenderer.drawBackground(render, virtualSceneFramebuffer)
+      render.draw(virtualObjectMesh, virtualObjectShader, virtualSceneFramebuffer)
+
+      // Update mask shader properties and draw
       maskObjectShader.setMat4("u_ModelView", modelViewMatrix)
       maskObjectShader.setMat4("u_ModelViewProjection", modelViewProjectionMatrix)
-      render.draw(virtualObjectMesh, maskObjectShader, virtualSceneFramebuffer)
+      render.draw(virtualObjectMesh, maskObjectShader, virtualMaskFramebuffer)
+
+      // Update composite mask and image shaders properties and draw
+      compositeShader
+        .setTexture("u_ColorTex", virtualSceneFramebuffer.colorTexture)
+        .setTexture("u_MaskTex",  virtualMaskFramebuffer.colorTexture)
+      render.draw(compositeMesh, compositeShader, compositeFramebuffer)
     }
 
     if (saveNextFrame) {
@@ -457,7 +567,7 @@ class HelloArRenderer(val activity: HelloArActivity) :
     }
 
     // Compose the virtual scene with the background.
-//    backgroundRenderer.drawVirtualScene(render, virtualSceneFramebuffer, Z_NEAR, Z_FAR)
+    backgroundRenderer.drawVirtualScene(render, virtualSceneFramebuffer, Z_NEAR, Z_FAR) //draws a mask over the object
   }
 
   /** Checks if we detected at least one plane. */
@@ -576,8 +686,6 @@ class HelloArRenderer(val activity: HelloArActivity) :
 
   private fun saveImages(frame: Frame) {
       val resolver = activity.contentResolver
-
-      // Create timestamp-based names to avoid overwriting
       val timestamp = System.currentTimeMillis()
 
       // --- 1. virtual scene (PNG) ----------------------------------------
@@ -588,20 +696,32 @@ class HelloArRenderer(val activity: HelloArActivity) :
 //      GLES30.glReadPixels(0, 0, w, h,
 //          GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, IntBuffer.wrap(buf))
 
-      // https://stackoverflow.com/questions/16461284/difference-between-bytebuffer-flip-and-bytebuffer-rewind
+      // Check which framebuffer is in use:
+      val bound = IntArray(1)
+      // Generic binding (what you normally care about)
+      GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, bound, 0)
+      // If you used separate read/draw bindings:
+      GLES30.glGetIntegerv(GLES30.GL_DRAW_FRAMEBUFFER_BINDING, bound, 0)
+      GLES30.glGetIntegerv(GLES30.GL_READ_FRAMEBUFFER_BINDING, bound, 0)
+      Log.d(TAG, "Currently bound FB = ${bound[0]}")  // 0 means the default window framebuffer
+      Log.d(TAG, "Draw FB = ${bound[0]}")
+      Log.d(TAG, "Read FB = ${bound[0]}")
+      Log.d(TAG, "virtualSceneFramebuffer ID = ${virtualSceneFramebuffer.framebufferId}")
+
       val byteBuf = ByteBuffer.allocateDirect(w * h * 4)
-      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 1)
+      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, virtualSceneFramebuffer.framebufferId)
       GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, byteBuf)
+
+      // https://stackoverflow.com/questions/16461284/difference-between-bytebuffer-flip-and-bytebuffer-rewind
       byteBuf.rewind()
       val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
       bmp.copyPixelsFromBuffer(byteBuf)          // copies bytes as R-G-B-A
 
-    val pngValues = ContentValues().apply {
+      val pngValues = ContentValues().apply {
           put(MediaStore.Images.Media.DISPLAY_NAME, "foreground_${timestamp}.png")
           put(MediaStore.Images.Media.MIME_TYPE, "image/png")
           put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ARCore")
       }
-
       val pngUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, pngValues)
       if (pngUri == null) {
           Log.e(TAG, "Failed to create MediaStore entry for PNG file")
@@ -613,126 +733,79 @@ class HelloArRenderer(val activity: HelloArActivity) :
           }
       }
 
-      // --- 2. background colour buffer (matches viewport/FBO) ------------
+      // --- 2. virtual object mask (PNG) ----------------------------------------
+      byteBuf.clear()
+      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, virtualMaskFramebuffer.framebufferId)
+      GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, byteBuf)
+      byteBuf.rewind()
+      bmp.copyPixelsFromBuffer(byteBuf)          // copies bytes as R-G-B-A
 
-      val bgByteBuf = ByteBuffer.allocateDirect(w * h * 4)
-      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-      GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, bgByteBuf)
-      bgByteBuf.rewind()
-      val bgBmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-      bgBmp.copyPixelsFromBuffer(bgByteBuf)          // copies bytes as R-G-B-A
-
-      val bgValues = ContentValues().apply {
-          put(MediaStore.Images.Media.DISPLAY_NAME, "background_${timestamp}.jpg")
-          put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-          put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ARCore")
+      val maskValues = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, "mask_${timestamp}.png")
+        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ARCore")
       }
-
-      val bgUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, bgValues)
-      if (bgUri == null) {
-          Log.e(TAG, "Failed to create MediaStore entry for background JPEG")
+      val maskUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, maskValues)
+      if (maskUri == null) {
+        Log.e(TAG, "Failed to create MediaStore entry for PNG file")
       } else {
-          resolver.openOutputStream(bgUri)?.use { os ->
-//              Bitmap.createBitmap(bgBuf, wBg, hBg, Bitmap.Config.ARGB_8888)
-                bgBmp.compress(Bitmap.CompressFormat.JPEG, 100, os)
-              os.flush()
-              Log.d(TAG, "Saved background JPEG to ${bgUri}")
-          }
+        resolver.openOutputStream(maskUri)?.use { os ->
+          bmp.compress(Bitmap.CompressFormat.PNG, 100, os)
+          os.flush()
+          Log.d(TAG, "Saved mask PNG to ${maskUri}")
+        }
       }
+
+      // --- 3. encoder input  in RBGA format (PNG) debug ----------------------------------------
+      byteBuf.clear()
+      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, compositeFramebuffer.framebufferId)
+      GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, byteBuf)
+      byteBuf.rewind()
+      bmp.copyPixelsFromBuffer(byteBuf)          // copies bytes as R-G-B-A
+
+      val debugValues = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, "debug_${timestamp}.png")
+        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ARCore")
+      }
+      val debugUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, maskValues)
+      if (debugUri == null) {
+        Log.e(TAG, "Failed to create MediaStore entry for PNG file")
+      } else {
+        resolver.openOutputStream(debugUri)?.use { os ->
+          bmp.compress(Bitmap.CompressFormat.PNG, 100, os)
+          os.flush()
+          Log.d(TAG, "Saved debug PNG to ${debugUri}")
+        }
+      }
+
+//      // --- 4. background colour buffer (matches viewport/FBO) ------------
+//      byteBuf.clear()
+//      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+//      GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, byteBuf)
+//      byteBuf.rewind()
+//      bmp.copyPixelsFromBuffer(byteBuf)          // copies bytes as R-G-B-A
+//
+//      val bgValues = ContentValues().apply {
+//          put(MediaStore.Images.Media.DISPLAY_NAME, "background_${timestamp}.jpg")
+//          put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+//          put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ARCore")
+//      }
+//
+//      val bgUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, bgValues)
+//      if (bgUri == null) {
+//          Log.e(TAG, "Failed to create MediaStore entry for background JPEG")
+//      } else {
+//          resolver.openOutputStream(bgUri)?.use { os ->
+////              Bitmap.createBitmap(bgBuf, wBg, hBg, Bitmap.Config.ARGB_8888)
+//              bmp.compress(Bitmap.CompressFormat.JPEG, 100, os)
+//              os.flush()
+//              Log.d(TAG, "Saved background JPEG to ${bgUri}")
+//          }
+//      }
   }
 
-  /** Converts a YUV_420_888 Image to an ARGB_8888 Bitmap using RenderScript for proper color */
-  private fun yuv420888ImageToBitmap(image: Image): Bitmap {
-    val width = image.width
-    val height = image.height
 
-    // Convert YUV_420_888 to NV21 byte array respecting pixel- and row-strides
-    val nv21 = imageToNV21(image)
-
-    // Lazily create RenderScript objects (reuse across calls)
-    if (!::rs.isInitialized) {
-      rs = RenderScript.create(activity)
-      yuvToRgbScript = ScriptIntrinsicYuvToRGB.create(rs, Element.U8_4(rs))
-    }
-
-    // Create or resize allocations as necessary
-    val yuvType = Type.Builder(rs, Element.U8(rs)).setX(nv21.size).create()
-    if (yuvAllocation == null || yuvAllocation!!.type.x != nv21.size) {
-      yuvAllocation = Allocation.createTyped(rs, yuvType, Allocation.USAGE_SCRIPT)
-    }
-
-    val rgbType = Type.Builder(rs, Element.RGBA_8888(rs)).setX(width).setY(height).create()
-    if (rgbAllocation == null || rgbAllocation!!.type.x != width || rgbAllocation!!.type.y != height) {
-      rgbAllocation = Allocation.createTyped(rs, rgbType, Allocation.USAGE_SCRIPT)
-    }
-
-    // Load YUV data and run the script
-    yuvAllocation!!.copyFrom(nv21)
-    yuvToRgbScript!!.setInput(yuvAllocation)
-    yuvToRgbScript!!.forEach(rgbAllocation)
-
-    // Copy to Bitmap
-    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    rgbAllocation!!.copyTo(bitmap)
-    return bitmap
-  }
-
-  // -------- RenderScript fields ---------
-  private lateinit var rs: RenderScript
-  private var yuvToRgbScript: ScriptIntrinsicYuvToRGB? = null
-  private var yuvAllocation: Allocation? = null
-  private var rgbAllocation: Allocation? = null
-
-  /** Converts Image in YUV_420_888 format to an NV21 byte[] suitable for RenderScript */
-  private fun imageToNV21(image: Image): ByteArray {
-    val width = image.width
-    val height = image.height
-
-    val yPlane = image.planes[0]
-    val uPlane = image.planes[1]
-    val vPlane = image.planes[2]
-
-    val ySize = width * height
-    val uvSize = width * height / 2
-
-    val nv21 = ByteArray(ySize + uvSize)
-
-    // Copy Y plane
-    val yBuffer = yPlane.buffer
-    val yRowStride = yPlane.rowStride
-    val yPixelStride = yPlane.pixelStride
-    var dstIndex = 0
-    for (row in 0 until height) {
-      var srcIndex = row * yRowStride
-      for (col in 0 until width) {
-        nv21[dstIndex++] = yBuffer.get(srcIndex)
-        srcIndex += yPixelStride
-      }
-    }
-
-    // Copy UV planes: NV21 requires V then U interleaved
-    val uBuffer = uPlane.buffer
-    val vBuffer = vPlane.buffer
-    val uvRowStride = uPlane.rowStride
-    val uvPixelStride = uPlane.pixelStride
-
-    var uvDstIndex = ySize
-    for (row in 0 until height / 2) {
-      var uSrcIndex = row * uvRowStride
-      var vSrcIndex = row * uvRowStride
-      for (col in 0 until width / 2) {
-        // V
-        nv21[uvDstIndex++] = vBuffer.get(vSrcIndex)
-        // U
-        nv21[uvDstIndex++] = uBuffer.get(uSrcIndex)
-
-        uSrcIndex += uvPixelStride
-        vSrcIndex += uvPixelStride
-      }
-    }
-
-    return nv21
-  }
 }
 
 /**

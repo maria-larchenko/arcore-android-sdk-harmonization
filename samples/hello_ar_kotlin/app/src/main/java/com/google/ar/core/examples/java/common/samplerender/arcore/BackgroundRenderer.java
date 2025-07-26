@@ -230,6 +230,14 @@ public class BackgroundRenderer {
   }
 
   /**
+   * Draws the AR background image into the provided Framebuffer instead of the default
+   * framebuffer. This is useful for off-screen composition.
+   */
+  public void drawBackground(SampleRender render, Framebuffer framebuffer) {
+    render.draw(mesh, backgroundShader, framebuffer);
+  }
+
+  /**
    * Draws the virtual scene. Any objects rendered in the given {@link Framebuffer} will be drawn
    * given the previously specified {@link OcclusionMode}.
    *

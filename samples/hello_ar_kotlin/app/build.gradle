@@ -46,6 +46,9 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+    aaptOptions {
+        noCompress 'tflite'
+    }
 }
 
 dependencies {
@@ -63,4 +66,7 @@ dependencies {
 
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
+
+    implementation "com.google.ai.edge.litert:litert:2.0.0-alpha"
+
 }
