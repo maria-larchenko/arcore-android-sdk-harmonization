@@ -29,6 +29,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.google.ai.edge.litert.Accelerator
 import com.google.ai.edge.litert.CompiledModel
+import com.google.ai.edge.litert.TensorBuffer
 import com.google.ar.core.Anchor
 import com.google.ar.core.Camera
 import com.google.ar.core.DepthPoint
@@ -347,7 +348,7 @@ class HelloArRenderer(val activity: HelloArActivity) :
     displayRotationHelper.onSurfaceChanged(width, height)
     virtualSceneFramebuffer.resize(width, height)
     virtualMaskFramebuffer.resize(width, height)
-    compositeFramebuffer.resize(width, height)
+    compositeFramebuffer.resize(256, 256)
   }
 
   private var saveNextFrame = false
@@ -499,31 +500,6 @@ class HelloArRenderer(val activity: HelloArActivity) :
       Matrix.multiplyMM(modelViewMatrix, 0, viewMatrix, 0, modelMatrix, 0)
       Matrix.multiplyMM(modelViewProjectionMatrix, 0, projectionMatrix, 0, modelViewMatrix, 0)
 
-//      // -----------  Run inference
-//      val inputBuffers = compiledModel.createInputBuffers()
-//      val outputBuffers = compiledModel.createOutputBuffers()
-//
-//      val dummy_input = FloatArray(256*256*4)
-//
-//      inputBuffers[0].writeFloat(dummy_input)
-//      compiledModel.run(inputBuffers, outputBuffers)
-//
-//      val outputFloatArray = outputBuffers[0].readFloat()
-//      Log.d(TAG, outputFloatArray.size.toString())
-
-      //      val testMat = FloatArray(16)
-//      testMat.fill(0.0f)
-//      testMat[0] = outputFloatArray[0]
-//      testMat[5] = outputFloatArray[4]
-//      testMat[10] = outputFloatArray[8]
-//      testMat[15] = 1.0f
-//      testMat[1] = outputFloatArray[1]
-//      testMat[2] = outputFloatArray[2]
-//      testMat[4] = outputFloatArray[3]
-//      testMat[8] = outputFloatArray[6]
-//      testMat[6] = outputFloatArray[5]
-//      testMat[9] = outputFloatArray[7]
-
       val testMat = FloatArray(16)
       testMat.fill(0.0f)
       testMat[0] = 1.0f
@@ -663,11 +639,11 @@ class HelloArRenderer(val activity: HelloArActivity) :
       }
 
     if (firstHitResult != null) {
-      // Cap the number of objects created. This avoids overloading both the
-      // rendering system and ARCore.
-      if (wrappedAnchors.size >= 20) {
+      // If we already have an anchor, remove it and create a new one at the new location
+      // This effectively moves the single object to the new position
+      if (wrappedAnchors.isNotEmpty()) {
         wrappedAnchors[0].anchor.detach()
-        wrappedAnchors.removeAt(0)
+        wrappedAnchors.clear()
       }
 
       // Adding an Anchor tells ARCore that it should track this position in
@@ -757,23 +733,26 @@ class HelloArRenderer(val activity: HelloArActivity) :
       }
 
       // --- 3. encoder input  in RBGA format (PNG) debug ----------------------------------------
-      byteBuf.clear()
+      val debugByteBuf = ByteBuffer.allocateDirect(256 * 256 * 4)
       GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, compositeFramebuffer.framebufferId)
-      GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, byteBuf)
-      byteBuf.rewind()
-      bmp.copyPixelsFromBuffer(byteBuf)          // copies bytes as R-G-B-A
+      GLES30.glReadPixels(0, 0, 256, 256, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, debugByteBuf)
+
+      // https://stackoverflow.com/questions/16461284/difference-between-bytebuffer-flip-and-bytebuffer-rewind
+      debugByteBuf.rewind()
+      val debugBmp = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+      debugBmp.copyPixelsFromBuffer(debugByteBuf)          // copies bytes as R-G-B-A
 
       val debugValues = ContentValues().apply {
         put(MediaStore.Images.Media.DISPLAY_NAME, "debug_${timestamp}.png")
         put(MediaStore.Images.Media.MIME_TYPE, "image/png")
         put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ARCore")
       }
-      val debugUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, maskValues)
+      val debugUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, debugValues)
       if (debugUri == null) {
         Log.e(TAG, "Failed to create MediaStore entry for PNG file")
       } else {
         resolver.openOutputStream(debugUri)?.use { os ->
-          bmp.compress(Bitmap.CompressFormat.PNG, 100, os)
+          debugBmp.compress(Bitmap.CompressFormat.PNG, 100, os)
           os.flush()
           Log.d(TAG, "Saved debug PNG to ${debugUri}")
         }
