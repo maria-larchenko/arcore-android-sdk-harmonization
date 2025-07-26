@@ -85,7 +85,7 @@ uniform bool u_LightEstimateIsValid;
 
 // My uniform
 uniform mat4 u_ColorCorrection;
-//uniform mat4 u_ColorCorrectionS;
+uniform vec4 u_ColorCorrectionBias;
 
 struct MaterialParameters {
   vec3 diffuse;
@@ -298,5 +298,5 @@ void main() {
 
   // Convert final color to sRGB color space
   o_FragColor = vec4(LinearToSrgb(radiance), 1.0);
-  o_FragColor = u_ColorCorrection * o_FragColor;
+  o_FragColor = u_ColorCorrection * o_FragColor + u_ColorCorrectionBias;
 }

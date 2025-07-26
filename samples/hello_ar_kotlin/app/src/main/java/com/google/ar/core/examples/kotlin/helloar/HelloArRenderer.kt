@@ -121,6 +121,11 @@ class HelloArRenderer(val activity: HelloArActivity) :
 
   // lateinit var interpreter: Interpreter
   lateinit var compiledModel: CompiledModel
+  val identityMat = FloatArray(16)
+  val identityVec = FloatArray(4)
+  val harmonizingMat = FloatArray(16)
+  val harmonizingVec = FloatArray(4)
+  private var harmonizatonOn = false
 
   // Virtual object (ARCore pawn)
   lateinit var virtualObjectMesh: Mesh
@@ -172,6 +177,13 @@ class HelloArRenderer(val activity: HelloArActivity) :
         CompiledModel.Options(Accelerator.GPU)
     )
     Log.d(TAG, compiledModel.toString())
+
+    identityMat.fill(0.0f)
+    identityMat[0] = 1.0f
+    identityMat[5] = 1.0f
+    identityMat[10] = 1.0f
+    identityMat[15] = 1.0f
+    identityVec.fill(0.0f)
 
     // Prepare the rendering objects.
     // This involves reading shaders and 3D model files, so may throw an IOException.
@@ -236,8 +248,8 @@ class HelloArRenderer(val activity: HelloArActivity) :
         Mesh(render, Mesh.PrimitiveMode.POINTS, /*indexBuffer=*/ null, pointCloudVertexBuffers)
 
       // Virtual object to render (ARCore pawn)
-//      val myobject = "ARCore pawn"
-      val myobject = "Minecraft chicken"
+      val myobject = "ARCore pawn"
+//      val myobject = "Minecraft chicken"
 
       if (myobject == "ARCore pawn") {
         virtualObjectAlbedoTexture =
@@ -428,6 +440,7 @@ class HelloArRenderer(val activity: HelloArActivity) :
     // has placed any objects.
     val message: String? =
       when {
+        harmonizatonOn -> activity.getString(R.string.harmonization_on)
         camera.trackingState == TrackingState.PAUSED &&
           camera.trackingFailureReason == TrackingFailureReason.NONE ->
           activity.getString(R.string.searching_planes)
@@ -500,41 +513,77 @@ class HelloArRenderer(val activity: HelloArActivity) :
       Matrix.multiplyMM(modelViewMatrix, 0, viewMatrix, 0, modelMatrix, 0)
       Matrix.multiplyMM(modelViewProjectionMatrix, 0, projectionMatrix, 0, modelViewMatrix, 0)
 
-      val testMat = FloatArray(16)
-      testMat.fill(0.0f)
-      testMat[0] = 1.0f
-      testMat[5] = 1.0f
-      testMat[10] = 1.0f
-      testMat[15] = 1.0f
-
       // Update shader properties and draw
       virtualObjectShader.setMat4("u_ModelView", modelViewMatrix)
       virtualObjectShader.setMat4("u_ModelViewProjection", modelViewProjectionMatrix)
-      virtualObjectShader.setMat4("u_ColorCorrection", testMat)
-      val texture =
-        if ((trackable as? InstantPlacementPoint)?.trackingMethod ==
-            InstantPlacementPoint.TrackingMethod.SCREENSPACE_WITH_APPROXIMATE_DISTANCE
-        ) {
-          virtualObjectAlbedoInstantPlacementTexture
-        } else {
-          virtualObjectAlbedoTexture
-        }
-      virtualObjectShader.setTexture("u_AlbedoTexture", texture)
-      render.draw(virtualObjectMesh, virtualObjectShader)
+      virtualObjectShader.setMat4("u_ColorCorrection", identityMat)
+      virtualObjectShader.setVec4("u_ColorCorrectionBias", identityVec)
+//      val texture =
+//        if ((trackable as? InstantPlacementPoint)?.trackingMethod ==
+//            InstantPlacementPoint.TrackingMethod.SCREENSPACE_WITH_APPROXIMATE_DISTANCE
+//        ) {
+//          virtualObjectAlbedoInstantPlacementTexture
+//        } else {
+//          virtualObjectAlbedoTexture
+//        }
+      virtualObjectShader.setTexture("u_AlbedoTexture", virtualObjectAlbedoTexture)
 
+      // Draw off-screen virtualSceneFramebuffer to construct encoder input
       backgroundRenderer.drawBackground(render, virtualSceneFramebuffer)
       render.draw(virtualObjectMesh, virtualObjectShader, virtualSceneFramebuffer)
 
-      // Update mask shader properties and draw
+      // Update mask shader properties and draw mask
       maskObjectShader.setMat4("u_ModelView", modelViewMatrix)
       maskObjectShader.setMat4("u_ModelViewProjection", modelViewProjectionMatrix)
       render.draw(virtualObjectMesh, maskObjectShader, virtualMaskFramebuffer)
 
-      // Update composite mask and image shaders properties and draw
+      // Update composite shaders only after virtualSceneFramebuffer and virtualMaskFramebuffer!
       compositeShader
         .setTexture("u_ColorTex", virtualSceneFramebuffer.colorTexture)
         .setTexture("u_MaskTex",  virtualMaskFramebuffer.colorTexture)
       render.draw(compositeMesh, compositeShader, compositeFramebuffer)
+
+      // Use compositeFramebuffer to get the color correction
+      if (frame.timestamp > 5000L && frame.timestamp % 10L == 0L) {
+        if (!harmonizatonOn) { harmonizatonOn = true }
+        val inputBuffers = compiledModel.createInputBuffers()
+        val outputBuffers = compiledModel.createOutputBuffers()
+
+        // Capture pixels from the composite framebuffer and convert to a normalized float array
+        val pixelByteBuf = ByteBuffer.allocateDirect(256 * 256 * 4).order(ByteOrder.nativeOrder())
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, compositeFramebuffer.framebufferId)
+        GLES30.glReadPixels(0, 0, 256, 256, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixelByteBuf)
+        pixelByteBuf.rewind()
+
+        val inputFloatArray = FloatArray(256 * 256 * 4)
+        for (i in inputFloatArray.indices) {
+          inputFloatArray[i] = (pixelByteBuf.get().toInt() and 0xFF) / 1.0f
+        }
+        inputBuffers[0].writeFloat(inputFloatArray)
+        compiledModel.run(inputBuffers, outputBuffers)
+
+        val outputFloatArray = outputBuffers[0].readFloat()
+        harmonizingMat.fill(0.0f)
+        harmonizingMat[0] = outputFloatArray[0]
+        harmonizingMat[5] = outputFloatArray[4]
+        harmonizingMat[10] = outputFloatArray[8]
+        harmonizingMat[15] = 1.0f
+        harmonizingMat[1] = outputFloatArray[1]
+        harmonizingMat[2] = outputFloatArray[2]
+        harmonizingMat[4] = outputFloatArray[3]
+        harmonizingMat[8] = outputFloatArray[6]
+        harmonizingMat[6] = outputFloatArray[5]
+        harmonizingMat[9] = outputFloatArray[7]
+        harmonizingVec[0] = outputFloatArray[9]
+        harmonizingVec[1] = outputFloatArray[10]
+        harmonizingVec[2] = outputFloatArray[11]
+        harmonizingVec[3] = 0.0f
+        virtualObjectShader.setMat4("u_ColorCorrection", harmonizingMat)
+        virtualObjectShader.setVec4("u_ColorCorrectionBias", harmonizingVec)
+      }
+
+      // Update shader properties and draw on-screen object
+      render.draw(virtualObjectMesh, virtualObjectShader)
     }
 
     if (saveNextFrame) {
@@ -543,7 +592,7 @@ class HelloArRenderer(val activity: HelloArActivity) :
     }
 
     // Compose the virtual scene with the background.
-    backgroundRenderer.drawVirtualScene(render, virtualSceneFramebuffer, Z_NEAR, Z_FAR) //draws a mask over the object
+//    backgroundRenderer.drawVirtualScene(render, virtualSceneFramebuffer, Z_NEAR, Z_FAR) //draws a mask over the object
   }
 
   /** Checks if we detected at least one plane. */

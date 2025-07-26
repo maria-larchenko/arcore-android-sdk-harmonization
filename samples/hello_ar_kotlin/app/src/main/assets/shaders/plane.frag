@@ -31,5 +31,5 @@ void main() {
   float alpha = (control.r * dotScale > u_GridControl.x) ? 1.0
                 : (control.g > u_GridControl.y)          ? lineFade
                                                          : (0.1 * lineFade);
-  o_FragColor = vec4(alpha * v_TexCoordAlpha.z);
+  o_FragColor = vec4(alpha * v_TexCoordAlpha.z * 0.3);
 }

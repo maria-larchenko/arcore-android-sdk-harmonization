@@ -33,5 +33,6 @@
 
   <string translatable="false" name="searching_planes">Searching for surfaces...</string>
   <string translatable="false" name="waiting_taps">Tap on a surface to place an object.</string>
+    <string name="harmonization_on">HARMONIZATION ON</string>
 
 </resources>
