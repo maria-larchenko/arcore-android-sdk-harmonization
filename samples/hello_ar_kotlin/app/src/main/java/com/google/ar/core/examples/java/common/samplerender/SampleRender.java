@@ -125,7 +125,7 @@ public class SampleRender {
   }
 
   /* package-private */
-  AssetManager getAssets() {
+  public AssetManager getAssets() {
     return assetManager;
   }
 

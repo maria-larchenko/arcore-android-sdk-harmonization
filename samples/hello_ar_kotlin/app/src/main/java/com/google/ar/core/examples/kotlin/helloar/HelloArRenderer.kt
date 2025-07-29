@@ -16,8 +16,6 @@
 package com.google.ar.core.examples.kotlin.helloar
 
 //import java.nio.FloatBuffer
-import android.R.attr.height
-import android.R.attr.width
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.opengl.GLES30
@@ -29,7 +27,6 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.google.ai.edge.litert.Accelerator
 import com.google.ai.edge.litert.CompiledModel
-import com.google.ai.edge.litert.TensorBuffer
 import com.google.ar.core.Anchor
 import com.google.ar.core.Camera
 import com.google.ar.core.DepthPoint
@@ -123,9 +120,10 @@ class HelloArRenderer(val activity: HelloArActivity) :
   lateinit var compiledModel: CompiledModel
   val identityMat = FloatArray(16)
   val identityVec = FloatArray(4)
-  val harmonizingMat = FloatArray(16)
-  val harmonizingVec = FloatArray(4)
-  private var harmonizatonOn = false
+  val harmMat = FloatArray(16)
+  val harmVec = FloatArray(4)
+
+  var renderedObject = "pawn"
 
   // Virtual object (ARCore pawn)
   lateinit var virtualObjectMesh: Mesh
@@ -248,79 +246,46 @@ class HelloArRenderer(val activity: HelloArActivity) :
         Mesh(render, Mesh.PrimitiveMode.POINTS, /*indexBuffer=*/ null, pointCloudVertexBuffers)
 
       // Virtual object to render (ARCore pawn)
-      val myobject = "ARCore pawn"
-//      val myobject = "Minecraft chicken"
-
-      if (myobject == "ARCore pawn") {
-        virtualObjectAlbedoTexture =
-          Texture.createFromAsset(
-            render,
-            "models/pawn_albedo.png",
-            Texture.WrapMode.CLAMP_TO_EDGE,
-            Texture.ColorFormat.SRGB
-          )
-        virtualObjectAlbedoInstantPlacementTexture =
-          Texture.createFromAsset(
-            render,
-            "models/pawn_albedo_instant_placement.png",
-            Texture.WrapMode.CLAMP_TO_EDGE,
-            Texture.ColorFormat.SRGB
-          )
-        val virtualObjectPbrTexture =
-          Texture.createFromAsset(
-            render,
-            "models/pawn_roughness_metallic_ao.png",
-            Texture.WrapMode.CLAMP_TO_EDGE,
-            Texture.ColorFormat.LINEAR
-          )
-        virtualObjectMesh = Mesh.createFromAsset(render, "models/pawn.obj")
-        virtualObjectShader =
-          Shader.createFromAssets(
-            render,
-            "shaders/environmental_hdr.vert",
-            "shaders/environmental_hdr.frag",
-            mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
-          )
-            .setTexture("u_AlbedoTexture", virtualObjectAlbedoTexture)
-            .setTexture("u_RoughnessMetallicAmbientOcclusionTexture", virtualObjectPbrTexture)
-            .setTexture("u_Cubemap", cubemapFilter.filteredCubemapTexture)
-            .setTexture("u_DfgTexture", dfgTexture)
-        maskObjectShader =
-          Shader.createFromAssets(
-            render,
-            "shaders/environmental_hdr.vert",
-            "shaders/mask_hdr.frag",
-            mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
-          )
-      } else {
-        virtualObjectAlbedoTexture =
-          Texture.createFromAsset(
-            render,
-            "models/chair_albedo.png",
-//            "models/chicken_albedo.png",
-            Texture.WrapMode.CLAMP_TO_EDGE,
-            Texture.ColorFormat.SRGB
-          )
-        virtualObjectMesh = Mesh.createFromAsset(render, "models/chair.obj")
-//        virtualObjectMesh = Mesh.createFromAsset(render, "models/chicken.obj")
-        virtualObjectShader =
-          Shader.createFromAssets(
-            render,
-            "shaders/environmental_hdr.vert",
-            "shaders/environmental_hdr.frag",
-            mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
-          )
-            .setTexture("u_AlbedoTexture", virtualObjectAlbedoTexture)
-            .setTexture("u_Cubemap", cubemapFilter.filteredCubemapTexture)
-            .setTexture("u_DfgTexture", dfgTexture)
-        maskObjectShader =
-          Shader.createFromAssets(
-            render,
-            "shaders/environmental_hdr.vert",
-            "shaders/mask_hdr.frag",
-            mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
-          )
-      }
+      virtualObjectAlbedoTexture =
+        Texture.createFromAsset(
+          render,
+          "models/pawn_albedo.png",
+          Texture.WrapMode.CLAMP_TO_EDGE,
+          Texture.ColorFormat.SRGB
+        )
+      virtualObjectAlbedoInstantPlacementTexture =
+        Texture.createFromAsset(
+          render,
+          "models/pawn_albedo_instant_placement.png",
+          Texture.WrapMode.CLAMP_TO_EDGE,
+          Texture.ColorFormat.SRGB
+        )
+      val virtualObjectPbrTexture =
+        Texture.createFromAsset(
+          render,
+          "models/pawn_roughness_metallic_ao.png",
+          Texture.WrapMode.CLAMP_TO_EDGE,
+          Texture.ColorFormat.LINEAR
+        )
+      virtualObjectMesh = Mesh.createFromAsset(render, "models/pawn.obj")
+      virtualObjectShader =
+        Shader.createFromAssets(
+          render,
+          "shaders/environmental_hdr.vert",
+          "shaders/environmental_hdr.frag",
+          mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
+        )
+          .setTexture("u_AlbedoTexture", virtualObjectAlbedoTexture)
+          .setTexture("u_RoughnessMetallicAmbientOcclusionTexture", virtualObjectPbrTexture)
+          .setTexture("u_Cubemap", cubemapFilter.filteredCubemapTexture)
+          .setTexture("u_DfgTexture", dfgTexture)
+      maskObjectShader =
+        Shader.createFromAssets(
+          render,
+          "shaders/environmental_hdr.vert",
+          "shaders/mask_hdr.frag",
+          mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
+        )
       compositeShader = Shader.createFromAssets(
         render,
         "shaders/composite_rgba.vert",
@@ -369,6 +334,64 @@ class HelloArRenderer(val activity: HelloArActivity) :
       saveNextFrame = true
   }
 
+  fun reloadVirtualObject(render: SampleRender, virtualObjectName: String) {
+    if (virtualObjectName == "pawn") {
+      virtualObjectAlbedoTexture =
+        Texture.createFromAsset(
+          render,
+          "models/pawn_albedo.png",
+          Texture.WrapMode.CLAMP_TO_EDGE,
+          Texture.ColorFormat.SRGB
+        )
+      virtualObjectAlbedoInstantPlacementTexture =
+        Texture.createFromAsset(
+          render,
+          "models/pawn_albedo_instant_placement.png",
+          Texture.WrapMode.CLAMP_TO_EDGE,
+          Texture.ColorFormat.SRGB
+        )
+      val virtualObjectPbrTexture =
+        Texture.createFromAsset(
+          render,
+          "models/pawn_roughness_metallic_ao.png",
+          Texture.WrapMode.CLAMP_TO_EDGE,
+          Texture.ColorFormat.LINEAR
+        )
+      virtualObjectMesh = Mesh.createFromAsset(render, "models/pawn.obj")
+      virtualObjectShader =
+        Shader.createFromAssets(
+          render,
+          "shaders/environmental_hdr.vert",
+          "shaders/environmental_hdr.frag",
+          mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
+        )
+          .setTexture("u_AlbedoTexture", virtualObjectAlbedoTexture)
+          .setTexture("u_RoughnessMetallicAmbientOcclusionTexture", virtualObjectPbrTexture)
+          .setTexture("u_Cubemap", cubemapFilter.filteredCubemapTexture)
+          .setTexture("u_DfgTexture", dfgTexture)
+    } else {
+      virtualObjectAlbedoTexture =
+        Texture.createFromAsset(
+          render,
+          "models/${virtualObjectName}_albedo.png",
+          Texture.WrapMode.CLAMP_TO_EDGE,
+          Texture.ColorFormat.SRGB
+        )
+      virtualObjectMesh = Mesh.createFromAsset(render, "models/${virtualObjectName}.obj")
+      virtualObjectShader =
+        Shader.createFromAssets(
+          render,
+          "shaders/environmental_hdr.vert",
+          "shaders/environmental_hdr.frag",
+          mapOf("NUMBER_OF_MIPMAP_LEVELS" to cubemapFilter.numberOfMipmapLevels.toString())
+        )
+          .setTexture("u_AlbedoTexture", virtualObjectAlbedoTexture)
+          .setTexture("u_Cubemap", cubemapFilter.filteredCubemapTexture)
+          .setTexture("u_DfgTexture", dfgTexture)
+    }
+
+  }
+
   override fun onDrawFrame(render: SampleRender) {
     val session = session ?: return
 
@@ -407,6 +430,7 @@ class HelloArRenderer(val activity: HelloArActivity) :
         activity.depthSettings.depthColorVisualizationEnabled()
       )
       backgroundRenderer.setUseOcclusion(render, activity.depthSettings.useDepthForOcclusion())
+      Log.d(TAG, "onDrawFrame ${render.getAssets()}")
     } catch (e: IOException) {
       Log.e(TAG, "Failed to read a required asset file", e)
       showError("Failed to read a required asset file: $e")
@@ -440,7 +464,6 @@ class HelloArRenderer(val activity: HelloArActivity) :
     // has placed any objects.
     val message: String? =
       when {
-        harmonizatonOn -> activity.getString(R.string.harmonization_on)
         camera.trackingState == TrackingState.PAUSED &&
           camera.trackingFailureReason == TrackingFailureReason.NONE ->
           activity.getString(R.string.searching_planes)
@@ -467,6 +490,12 @@ class HelloArRenderer(val activity: HelloArActivity) :
     // If not tracking, don't draw 3D objects.
     if (camera.trackingState == TrackingState.PAUSED) {
       return
+    }
+
+    // -- Update selected 3d object
+    if (renderedObject != activity.selectedObject) {
+      reloadVirtualObject(render, activity.selectedObject)
+      renderedObject = activity.selectedObject
     }
 
     // -- Draw non-occluded virtual objects (planes, point cloud)
@@ -544,8 +573,7 @@ class HelloArRenderer(val activity: HelloArActivity) :
       render.draw(compositeMesh, compositeShader, compositeFramebuffer)
 
       // Use compositeFramebuffer to get the color correction
-      if (frame.timestamp > 5000L && frame.timestamp % 10L == 0L) {
-        if (!harmonizatonOn) { harmonizatonOn = true }
+      if (activity.isHarmonizationEnabled && frame.timestamp % 2L == 0L) {
         val inputBuffers = compiledModel.createInputBuffers()
         val outputBuffers = compiledModel.createOutputBuffers()
 
@@ -563,23 +591,23 @@ class HelloArRenderer(val activity: HelloArActivity) :
         compiledModel.run(inputBuffers, outputBuffers)
 
         val outputFloatArray = outputBuffers[0].readFloat()
-        harmonizingMat.fill(0.0f)
-        harmonizingMat[0] = outputFloatArray[0]
-        harmonizingMat[5] = outputFloatArray[4]
-        harmonizingMat[10] = outputFloatArray[8]
-        harmonizingMat[15] = 1.0f
-        harmonizingMat[1] = outputFloatArray[1]
-        harmonizingMat[2] = outputFloatArray[2]
-        harmonizingMat[4] = outputFloatArray[3]
-        harmonizingMat[8] = outputFloatArray[6]
-        harmonizingMat[6] = outputFloatArray[5]
-        harmonizingMat[9] = outputFloatArray[7]
-        harmonizingVec[0] = outputFloatArray[9]
-        harmonizingVec[1] = outputFloatArray[10]
-        harmonizingVec[2] = outputFloatArray[11]
-        harmonizingVec[3] = 0.0f
-        virtualObjectShader.setMat4("u_ColorCorrection", harmonizingMat)
-        virtualObjectShader.setVec4("u_ColorCorrectionBias", harmonizingVec)
+        harmMat.fill(0.0f)
+        harmMat[0] = outputFloatArray[0]
+        harmMat[5] = outputFloatArray[4]
+        harmMat[10] = outputFloatArray[8]
+        harmMat[15] = 1.0f
+        harmMat[1] = outputFloatArray[1]
+        harmMat[2] = outputFloatArray[2]
+        harmMat[4] = outputFloatArray[3]
+        harmMat[8] = outputFloatArray[6]
+        harmMat[6] = outputFloatArray[5]
+        harmMat[9] = outputFloatArray[7]
+        harmVec[0] = outputFloatArray[9]
+        harmVec[1] = outputFloatArray[10]
+        harmVec[2] = outputFloatArray[11]
+        harmVec[3] = 0.0f
+        virtualObjectShader.setMat4("u_ColorCorrection", harmMat)
+        virtualObjectShader.setVec4("u_ColorCorrectionBias", harmVec)
       }
 
       // Update shader properties and draw on-screen object

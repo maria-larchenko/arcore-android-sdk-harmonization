@@ -33,6 +33,25 @@
 
   <string translatable="false" name="searching_planes">Searching for surfaces...</string>
   <string translatable="false" name="waiting_taps">Tap on a surface to place an object.</string>
-    <string name="harmonization_on">HARMONIZATION ON</string>
+  <string translatable="false" name="model_selection_label">Select Model:</string>
+  <string-array translatable="false" name="model_options_array">
+    <item>Pawn</item>
+    <item>Chair</item>
+    <item>Beach Ball</item>
+    <item>Green Sofa</item>
+    <item>IKEA</item>
+    <item>Burger</item>
+    <item>Skeleton</item>
+    <item>Knight</item>
+    <item>Lexus</item>
+    <item>Chicken</item>
+    <item>Tangerines</item>
+    <item>Manhole</item>
+    <item>Fern</item>
+    <item>Anime girl</item>
+    <item>Penguin</item>
+    <item>Coffee</item>
+    <item>Guitar</item>
+  </string-array>
 
 </resources>

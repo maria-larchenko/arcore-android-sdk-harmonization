@@ -50,6 +50,10 @@ class HelloArActivity : AppCompatActivity() {
 
   val instantPlacementSettings = InstantPlacementSettings()
   val depthSettings = DepthSettings()
+  
+  // Store the selected model type
+  var selectedObject: String = "pawn"
+  var isHarmonizationEnabled: Boolean = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)

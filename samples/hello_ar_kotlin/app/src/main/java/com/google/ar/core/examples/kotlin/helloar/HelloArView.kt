@@ -21,6 +21,10 @@ import android.view.View
 import android.widget.ImageButton
 import android.widget.Button
 import android.widget.PopupMenu
+import android.widget.Spinner
+import android.widget.ArrayAdapter
+import android.widget.AdapterView
+import android.widget.Switch
 import androidx.appcompat.app.AlertDialog
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -51,10 +55,59 @@ class HelloArView(val activity: HelloArActivity) : DefaultLifecycleObserver {
 
   // Button that captures current frame
   private val captureButton =
-    root.findViewById<android.widget.Button>(R.id.capture_button).apply {
+    root.findViewById<android.widget.ImageButton>(R.id.capture_button).apply {
       setOnClickListener {
         activity.renderer.requestSave()
       }
+    }
+
+  // Switch for Foo
+  private val fooSwitch =
+    root.findViewById<Switch>(R.id.harmonization_switch).apply {
+      setOnCheckedChangeListener { _, isChecked ->
+        activity.isHarmonizationEnabled = isChecked
+      }
+    }
+
+  // Spinner for model selection
+  private val modelSelectionSpinner =
+    root.findViewById<Spinner>(R.id.model_selection_spinner).apply {
+      val adapter = ArrayAdapter(
+        activity,
+        android.R.layout.simple_spinner_item,
+        activity.resources.getStringArray(R.array.model_options_array)
+      ).apply {
+        setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+      }
+      this.adapter = adapter
+      
+      setOnItemSelectedListener(object : AdapterView.OnItemSelectedListener {
+        override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+          activity.selectedObject = when (position) {
+            0 -> "pawn"
+            1 -> "chair"
+            2 -> "beach_ball"
+            3 -> "green_sofa"
+            4 -> "ikea"
+            5 -> "burger"
+            6 -> "skeleton"
+            7 -> "knight"
+            8 -> "lexus"
+            9 -> "chicken_fix"
+            10 -> "tangerines"
+            11 -> "manhole"
+            12 -> "fern"
+            13 -> "anime"
+            14 -> "penguin"
+            15 -> "mug"
+            16 -> "guitar"
+            else -> "pawn"
+          }
+        }
+        override fun onNothingSelected(parent: AdapterView<*>?) {
+          activity.selectedObject = "pawn"
+        }
+      })
     }
 
   val session
